@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Bisamhällen – karta med statistik</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+
+    .legend, .stats {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      font-family: "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .legend {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 10px 12px;
+      width: 180px;
+    }
+    .legend label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .colorbox {
+      width: 18px; height: 18px;
+      border-radius: 3px;
+      border: 1px solid #aaa;
+    }
+
+    .stats {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      padding: 14px 20px;
+      width: 300px;
+      font-size: 15px;
+    }
+    .stats h4 {
+      margin: 0 0 6px 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .stats hr {
+      border: none;
+      border-top: 1px solid #ddd;
+      margin: 6px 0;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+const SHEET_ID = "198fzP9agUCL3qP1hF8HO0MtfG1gPajToXOlpGpCXZik";
+const API_KEY  = "AIzaSyAzqBbAZmA2TmRq-kzSG_8RnOTvnWjdP5c";
+const RANGE    = "Heatmap!A:F";
+const SHEETS_URL =
+  `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${RANGE}?key=${API_KEY}`;
+
+/* --- Skala: varje samhälle = 50 meter, max 20 --- */
+function getRadiusMeters(antal) {
+  const n = Math.min(parseFloat(antal), 20);
+  return n * 50;
+}
+
+async function initMap() {
+  const res = await fetch(SHEETS_URL);
+  const data = await res.json();
+  if (!data.values || data.values.length < 2) {
+    alert("Ingen data hittad");
+    return;
+  }
+
+  const rows = data.values.slice(1);
+
+  const map = L.map('map').setView([60.16, 17.24], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap-bidragsgivare'
+  }).addTo(map);
+
+  const colors = {
+    Nordiska: "#000000",
+    Buckfast: "#FF8C00",
+    Ligustica: "#FFD700",
+    Carnica: "#B0B0B0"
+  };
+
+  const rasLayers = {}, stats = {};
+  for (const ras in colors) {
+    rasLayers[ras] = L.layerGroup().addTo(map);
+    stats[ras] = { platser: 0, samhällen: 0 };
+  }
+
+  // Rita bikupor
+  rows.forEach(([namn, beskrivning, lat, lng, antal, ras]) => {
+    if (!lat || !lng || !antal || !ras) return;
+    ras = ras.trim();
+    if (!colors[ras]) return;
+
+    const radius = getRadiusMeters(antal);
+    const circle = L.circle([lat, lng], {
+      radius,
+      color: colors[ras],
+      weight: 0,
+      fillColor: colors[ras],
+      fillOpacity: 0.75
+    })
+    .bindPopup(`<b>${namn}</b><br>${beskrivning}<br>${antal} samhällen<br>${ras}`)
+    .addTo(rasLayers[ras]);
+
+    stats[ras].platser++;
+    stats[ras].samhällen += parseInt(antal);
+  });
+
+  // Filterpanel
+  const legend = L.control({ position: 'topright' });
+  legend.onAdd = function() {
+    const div = L.DomUtil.create('div', 'legend');
+    div.innerHTML = "<strong>Visa / Dölj raser</strong><br>";
+    for (const ras in colors) {
+      const label = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = true;
+      cb.onchange = () => {
+        if (cb.checked) map.addLayer(rasLayers[ras]);
+        else map.removeLayer(rasLayers[ras]);
+      };
+      const box = document.createElement("div");
+      box.className = "colorbox"; box.style.background = colors[ras];
+      label.appendChild(cb);
+      label.appendChild(box);
+      label.appendChild(document.createTextNode(ras));
+      div.appendChild(label);
+    }
+    return div;
+  };
+  legend.addTo(map);
+
+  // Statistikpanel
+  const statsCtrl = L.control({ position: 'bottomleft' });
+  statsCtrl.onAdd = function() {
+    const div = L.DomUtil.create('div', 'stats');
+    const totalSamhällen = Object.values(stats).reduce((a,b) => a + b.samhällen, 0);
+    const totalPlatser = Object.values(stats).reduce((a,b) => a + b.platser, 0);
+    let html = "<h4>📊 Statistik</h4>";
+    html += `<b>Totalt:</b> ${totalPlatser} antal bigårdar<br>`;
+    html += `<b>Samhällen:</b> ${totalSamhällen}<hr>`;
+    for (const ras in stats) {
+      html += `<span style="color:${colors[ras]}">●</span> <b>${ras}</b>: ${stats[ras].platser} platser, ${stats[ras].samhällen} samhällen<br>`;
+    }
+    div.innerHTML = html;
+    return div;
+  };
+  statsCtrl.addTo(map);
+
+  /* --- Heby kommun --- */
+  fetch("georef-sweden-kommun-millesime.geojson")
+    .then(res => res.json())
+    .then(data => {
+      const heby = data.features.filter(f => {
+        const namn = f.properties?.kom_name?.[0];
+        return namn && namn.toLowerCase() === "heby";
+      });
+
+      if (heby.length === 0) {
+        console.warn("Heby hittades inte i GeoJSON.");
+        return;
+      }
+
+      const hebyLayer = L.geoJSON(heby, {
+        style: {
+          color: "#00A000",
+          weight: 3,
+          fillColor: "#00FF0050",
+          fillOpacity: 0.3
+        },
+        onEachFeature: (feature, layer) => {
+          const namn = feature.properties.kom_name[0];
+          layer.bindPopup(`${namn} kommun`);
+        }
+      }).addTo(map);
+
+      map.fitBounds(hebyLayer.getBounds().pad(0.1));
+      console.log("✅ Heby-gräns inlagd!");
+    })
+    .catch(err => console.error("Fel vid inläsning av GeoJSON:", err));
+}
+
+initMap();
+</script>
+</body>
+</html>
